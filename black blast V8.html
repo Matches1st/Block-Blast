@@ -522,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         let linesClearedCount = linesToClear.rows.length + linesToClear.cols.length;
         if(linesClearedCount > 0) {
-            score += linesClearedCount * 10;
+            // No score is awarded for initial clears to ensure score starts at 0.
             linesToClear.rows.forEach(y => board[y].fill(null));
             linesToClear.cols.forEach(x => board.forEach(row => row[x] = null));
         }
