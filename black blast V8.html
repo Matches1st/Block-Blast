@@ -560,74 +560,84 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- Smart Piece Generation ---
     function generateNewPieces() {
-        clearedLineThisRound = false; // Reset for the new round of pieces
+        clearedLineThisRound = false; // Reset for the new round
 
-        const rowFullness = Array(GRID_SIZE).fill(0);
-        const colFullness = Array(GRID_SIZE).fill(0);
-        for (let y = 0; y < GRID_SIZE; y++) {
-            for (let x = 0; x < GRID_SIZE; x++) {
-                if (board[y][x]) {
-                    rowFullness[y]++;
-                    colFullness[x]++;
-                }
-            }
-        }
-
-        const COMBO_HELP_THRESHOLD = 4;
-        const targetRows = new Set();
-        const targetCols = new Set();
-        rowFullness.forEach((count, i) => { if (count >= COMBO_HELP_THRESHOLD && count < GRID_SIZE) targetRows.add(i); });
-        colFullness.forEach((count, i) => { if (count >= COMBO_HELP_THRESHOLD && count < GRID_SIZE) targetCols.add(i); });
+        const COMBO_SETUP_THRESHOLD = 5; // How many blocks in a line to be considered a "setup"
 
         const scoredPieces = PIECE_DEFINITIONS.map(pieceDef => {
-            let maxScore = 0;
+            let maxPlacementScore = 0;
             let isPlayable = false;
             
+            // Test every possible position for the piece
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
-                    if (canPlacePiece(pieceDef, x, y)) {
+                    if (canPlacePiece(pieceDef, x, y, board)) {
                         isPlayable = true;
-                        let currentScore = 1;
                         
-                        pieceDef.shape.forEach((row, py) => {
-                            row.forEach((val, px) => {
+                        // Simulate the placement to score it
+                        const tempBoard = board.map(row => [...row]);
+                        pieceDef.shape.forEach((row, pieceY) => {
+                            row.forEach((val, pieceX) => {
+                                if (val) tempBoard[y + pieceY][x + pieceX] = pieceDef.color;
+                            });
+                        });
+
+                        // 1. Score based on lines cleared (highest priority)
+                        let clearedLines = 0;
+                        for(let i = 0; i < GRID_SIZE; i++) {
+                            if (tempBoard[i].every(cell => cell)) clearedLines++;
+                            if (tempBoard.every(row => row[i])) clearedLines++;
+                        }
+                        let placementScore = clearedLines * 50; // Huge bonus for clearing lines
+
+                        // 2. Add a smaller bonus for setting up future combos
+                        let setupValue = 0;
+                        pieceDef.shape.forEach((row, pieceY) => {
+                            row.forEach((val, pieceX) => {
                                 if (val) {
-                                    const boardY = y + py;
-                                    const boardX = x + px;
-                                    if (targetRows.has(boardY)) currentScore++;
-                                    if (targetCols.has(boardX)) currentScore++;
+                                    const boardY = y + pieceY;
+                                    const boardX = x + pieceX;
+                                    const rowFullness = tempBoard[boardY].filter(c => c).length;
+                                    const colFullness = tempBoard.map(r => r[boardX]).filter(c => c).length;
+                                    if(rowFullness >= COMBO_SETUP_THRESHOLD) setupValue++;
+                                    if(colFullness >= COMBO_SETUP_THRESHOLD) setupValue++;
                                 }
                             });
                         });
-                        if (currentScore > maxScore) maxScore = currentScore;
+                        placementScore += setupValue;
+
+                        if (placementScore > maxPlacementScore) {
+                            maxPlacementScore = placementScore;
+                        }
                     }
                 }
             }
-            return { ...pieceDef, score: isPlayable ? maxScore : -1 };
-        }).filter(p => p.score > 0);
+            return { ...pieceDef, score: isPlayable ? maxPlacementScore : -1 };
+        }).filter(p => p.score >= 0);
 
+        // --- Select 3 pieces based on the scores ---
         let newPieces = [];
         if (scoredPieces.length < 3) {
-            let randomPieces = [];
+            // Failsafe: if not enough variety, grab random playable pieces
             let allPlayable = PIECE_DEFINITIONS.filter(p => isPiecePlayable(p));
             if (allPlayable.length === 0) {
                  currentPieces = [PIECE_DEFINITIONS[0], PIECE_DEFINITIONS[0], PIECE_DEFINITIONS[0]].map((p,i) => ({...p, id:i, used:true}));
                  return;
             }
             for (let i = 0; i < 3; i++) {
-                randomPieces.push(allPlayable[Math.floor(Math.random() * allPlayable.length)]);
+                newPieces.push(allPlayable[Math.floor(Math.random() * allPlayable.length)]);
             }
-            newPieces = randomPieces;
         } else {
+            // Use weighted random selection from the best pieces
             scoredPieces.sort((a, b) => b.score - a.score);
-            const topTier = scoredPieces.slice(0, Math.min(scoredPieces.length, 12));
+            const topTier = scoredPieces.slice(0, Math.min(scoredPieces.length, 15));
             
             for (let i = 0; i < 3; i++) {
-                const totalWeight = topTier.reduce((sum, p) => sum + p.score, 0);
+                const totalWeight = topTier.reduce((sum, p) => sum + p.score + 1, 0); // +1 to allow 0-score pieces
                 let rand = Math.random() * totalWeight;
-                let chosenPiece = topTier[topTier.length - 1];
+                let chosenPiece = topTier[topTier.length - 1]; // Default to last
                 for (const piece of topTier) {
-                    rand -= piece.score;
+                    rand -= (piece.score + 1);
                     if (rand <= 0) {
                         chosenPiece = piece;
                         break;
@@ -639,20 +649,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         currentPieces = newPieces.map((p, i) => ({ ...p, id: i, used: false }));
         pieceContainers.forEach(cont => cont.classList.remove('used'));
-
-        if (!currentPieces.some(p => isPiecePlayable(p))) {
-             console.warn("Smart generator created unplayable set. Retrying with random.");
-             let safetyBreak = 0;
-             do {
-                currentPieces = [];
-                for (let i=0; i<3; i++) {
-                    const pieceDef = PIECE_DEFINITIONS[Math.floor(Math.random() * PIECE_DEFINITIONS.length)];
-                    currentPieces.push({ ...pieceDef, id: i, used: false });
-                }
-                safetyBreak++;
-             } while(!currentPieces.some(p => isPiecePlayable(p)) && safetyBreak < 100);
-        }
     }
+
 
     // --- Game Actions ---
     function isPiecePlayable(piece, targetBoard = board) {
@@ -760,15 +758,27 @@ document.addEventListener('DOMContentLoaded', () => {
      
     function checkGameOver() {
         if (gameOver) return;
-        for (const piece of currentPieces) {
-            if (!piece.used && isPiecePlayable(piece)) return;
+        if (currentPieces.every(p => p.used)) {
+             if (!currentPieces.some(p => isPiecePlayable(p))) {
+                 // Game over only if a new set is generated and NONE are playable.
+                 gameOver = true;
+             }
+        } else {
+             // Check if any of the REMAINING pieces can be played.
+             const remainingPlayable = currentPieces.some(p => !p.used && isPiecePlayable(p));
+             if (!remainingPlayable) {
+                 gameOver = true;
+             }
         }
-        gameOver = true;
-        sounds.gameOver();
-        saveHighScore();
-        finalScoreElement.textContent = score;
-        gameOverModal.classList.add('visible');
+
+        if(gameOver) {
+            sounds.gameOver();
+            saveHighScore();
+            finalScoreElement.textContent = score;
+            gameOverModal.classList.add('visible');
+        }
     }
+
 
     // --- Drawing & Rendering ---
     
