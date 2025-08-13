@@ -65,6 +65,10 @@
         }
         #current-score-container {
             font-size: 2.5em;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1.1;
         }
 
         .icon {
@@ -124,6 +128,23 @@
         .piece-canvas {
             max-width: 100%;
             max-height: 100%;
+        }
+
+        #combo-indicator {
+            font-size: 0.4em;
+            color: var(--text-gold);
+            letter-spacing: 1px;
+            opacity: 0;
+            transform: translateY(10px) scale(0.8);
+            transition: all 0.2s ease-out;
+            height: 0;
+            overflow: hidden;
+        }
+        #combo-indicator.visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            height: auto;
+            margin-top: 2px;
         }
 
         /* --- Animations & Effects --- */
@@ -232,6 +253,7 @@
             </div>
             <div id="current-score-container">
                 <div id="score-display">0</div>
+                <div id="combo-indicator"></div>
             </div>
             <div id="settings-container">
                 <span>⚙️</span>
@@ -282,6 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pieceContexts = [];
     let board, score = 0, highScore = 0, combo = 0, currentPieces = [], gameOver = false;
     let clearingBlocks = [];
+    let clearedLineThisRound = false;
     
     let isDragging = false;
     let draggedPiece = null;
@@ -292,6 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const mainCtx = mainCanvas.getContext('2d');
     const scoreElement = document.getElementById('score-display');
     const highScoreElement = document.getElementById('high-score-display');
+    const comboIndicator = document.getElementById('combo-indicator');
     
     const gameOverModal = document.getElementById('game-over-modal');
     const finalScoreElement = document.getElementById('final-score');
@@ -371,6 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mainCanvas.width = GRID_SIZE * BLOCK_SIZE; mainCanvas.height = GRID_SIZE * BLOCK_SIZE;
         board = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null));
         loadHighScore(); score = 0; combo = 0; gameOver = false;
+        clearedLineThisRound = false;
         
         pieceContainers.forEach(cont => cont.classList.remove('used'));
 
@@ -380,6 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         performInitialClear();
         updateScoreDisplay();
+        updateComboDisplay();
 
         drawPiecesForSelection();
         checkGameOver();
@@ -521,9 +547,21 @@ document.addEventListener('DOMContentLoaded', () => {
             highScoreElement.textContent = highScore;
         }
     }
+
+    function updateComboDisplay() {
+        if (combo > 1) { // A streak starts from the 2nd consecutive clear
+            const multiplier = Math.min(combo, 8);
+            comboIndicator.textContent = `COMBO x${multiplier}`;
+            comboIndicator.classList.add('visible');
+        } else {
+            comboIndicator.classList.remove('visible');
+        }
+    }
     
     // --- Smart Piece Generation ---
     function generateNewPieces() {
+        clearedLineThisRound = false; // Reset for the new round of pieces
+
         const rowFullness = Array(GRID_SIZE).fill(0);
         const colFullness = Array(GRID_SIZE).fill(0);
         for (let y = 0; y < GRID_SIZE; y++) {
@@ -632,11 +670,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!canPlacePiece(piece, gridX, gridY)) return false;
         
         sounds.place();
+        let blocksInPiece = 0;
         piece.shape.forEach((row, y) => {
             row.forEach((value, x) => {
-                if (value) { board[gridY + y][gridX + x] = piece.color; score++; }
+                if (value) { 
+                    board[gridY + y][gridX + x] = piece.color; 
+                    score++;
+                    blocksInPiece++;
+                }
             });
         });
+
+        if (blocksInPiece >= 8) {
+            score += 50;
+        }
         
         piece.used = true;
         pieceContainers[piece.id].classList.add('used');
@@ -644,8 +691,14 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const linesWereCleared = clearLines();
 
+        // Check if round is over (all 3 pieces used)
         if (currentPieces.every(p => p.used)) { 
-            generateNewPieces(); 
+            // If no line was cleared this round, break the combo streak
+            if (!clearedLineThisRound) {
+                combo = 0;
+                updateComboDisplay();
+            }
+            generateNewPieces(); // This also resets the clearedLineThisRound flag
             drawPiecesForSelection(); 
         }
         
@@ -674,14 +727,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (board.every(row => row[i])) linesToClear.cols.push(i);
         }
         let linesClearedCount = linesToClear.rows.length + linesToClear.cols.length;
+        
         if(linesClearedCount === 0) { 
-            combo = 0; 
-            return false;
+            return false; // Don't reset combo here, wait until the round of 3 pieces is over
         }
 
         combo++;
-        score += linesClearedCount * 10 * combo;
+        clearedLineThisRound = true; // Mark that a clear happened in this round
+        const multiplier = Math.min(combo, 8); // Cap multiplier at 8x as per PDF
+        score += linesClearedCount * 10 * multiplier;
         sounds.clear();
+        updateComboDisplay();
         
         linesToClear.rows.forEach(y => {
             triggerLineClearFlash(y, 'row');
